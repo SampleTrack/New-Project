@@ -1,100 +1,84 @@
-import asyncio
+import os
 import sys
-import urllib.parse
-import feedparser
+import logging
+from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 from hydrogram import Client
-from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
 
-# Initialize FastAPI Web Server to cheat Render's Free Port Check
-web_app = FastAPI()
+# Configure real-time diagnostic stream saving to a local text file
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("bot_errors.txt", mode="a", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger("DealBot")
+
+# Global reference mapping containers
 bot_app = None
-POSTED_DEALS_CACHE = set()
 
-@web_app.get("/")
-def read_root():
-    """Keeps Render happy by returning a 200 OK website status code."""
-    return {"status": "online", "message": "Affiliate Deal Bot Running Successfully"}
-
-def convert_to_earnkaro(target_url: str) -> str:
-    base_url = target_url.split("?")[0]
-    encoded_target = urllib.parse.quote(base_url)
-    return f"https://earnkaro.com/connect?url={encoded_target}"
-
-async def fetch_and_post_deals():
-    """Scans aggregator streams for trending price drops and posts them."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handles secure application execution startup and graceful shutdowns context."""
     global bot_app
-    print("🔍 Scanning live data feeds for top Amazon, Flipkart & Myntra deals...")
-    feed_url = "https://www.desidime.com/feed/top-deals.atom"
+    logger.info("🚀 Bootstrapping Hydrogram engine within explicit async loop task container...")
     
     try:
-        feed = feedparser.parse(feed_url)
-        for entry in feed.entries[:5]:
-            deal_id = entry.id
-            if deal_id in POSTED_DEALS_CACHE:
-                continue
-                
-            title = entry.title
-            raw_url = entry.link
-            
-            # Filter specifically for your chosen e-commerce platforms
-            if not any(p in raw_url.lower() for p in ["amazon", "flipkart", "myntra"]):
-                continue
+        bot_app = Client(
+            "automated_deal_bot",
+            api_id=Config.API_ID,
+            api_hash=Config.API_HASH,
+            bot_token=Config.BOT_TOKEN
+        )
+        
+        # Import the deal loop routine cleanly out of our separate module file
+        from deals_worker import register_handlers, automation_loop
+        
+        # Register the text listener functions onto our client scope container
+        register_handlers(bot_app)
+        
+        # Start the MTProto connection
+        await bot_app.start()
+        logger.info("🤖 Hydrogram connected! Scheduling background deal pipeline...")
+        
+        # Deploy the autonomous deal hunter routine as a non-blocking context background task
+        bg_task = asyncio.create_task(automation_loop(bot_app))
+        
+        yield  # Hand over loop context execution to the core web service runtime layer
+        
+        # Graceful shutdown process execution cleanup handling lines
+        bg_task.cancel()
+        await bot_app.stop()
+        logger.info("🛑 Background client workers stopped safely.")
+        
+    except Exception as initialization_fault:
+        logger.critical(f"❌ DEADLOCK CRASH ON STARTUP: {str(initialization_fault)}")
+        raise initialization_fault
 
-            affiliate_link = convert_to_earnkaro(raw_url)
+# Mount the server using modern lifespan logic matching FastAPI 2026 standards
+app = FastAPI(lifespan=lifespan)
 
-            premium_caption = (
-                f"🔥 **🔥 TOP TRENDING DEAL ALERT 🔥**\n\n"
-                f"📦 **Product:** {title}\n\n"
-                f"⚡ *Price drop detected! Grab it at its lowest price before stock runs out.*"
-            )
+@app.get("/")
+def home():
+    """Satisfies Render free tier HTTP live checks."""
+    return {"status": "active", "engine": "Hydrogram 0.2.0 + FastAPI Core"}
 
-            inline_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(text="🛒 Grab Deal Now", url=affiliate_link)]
-            ])
-
-            await bot_app.send_message(
-                chat_id=Config.CHANNEL_ID,
-                text=premium_caption,
-                reply_markup=inline_keyboard
-            )
-            
-            POSTED_DEALS_CACHE.add(deal_id)
-            print(f"✅ Auto-posted: {title[:30]}...")
-            await asyncio.sleep(10)
-            
-    except Exception as e:
-        print(f"⚠️ Error while parsing deal feeds: {str(e)}", file=sys.stderr)
-
-async def automation_loop():
-    """Continuous loop running in the background every 30 minutes."""
-    while True:
-        await fetch_and_post_deals()
-        print("😴 Scan completed. Sleeping for 30 minutes...")
-        await asyncio.sleep(1800)
-
-@web_app.on_event("startup")
-async def start_bot():
-    """Triggers instantly when the FastAPI web server starts up."""
-    global bot_app
-    print("🚀 Initializing Hydrogram Bot Client Engine...")
-    bot_app = Client(
-        "automated_deal_bot",
-        api_id=Config.API_ID,
-        api_hash=Config.API_HASH,
-        bot_token=Config.BOT_TOKEN
-    )
-    await bot_app.start()
-    print("🤖 Bot is connected! Starting background auto-finder task...")
-    
-    # Run the deal finder loop as an independent background task inside the server
-    asyncio.create_task(automation_loop())
+@app.get("/logs", response_class=PlainTextResponse)
+def get_bot_error_logs():
+    """Secure public text pipeline tracking diagnostic failure stack records directly."""
+    log_path = "bot_errors.txt"
+    if not os.path.exists(log_path) or os.path.getsize(log_path) == 0:
+        return "✨ Log Matrix Clean: Zero framework faults recorded in this cycle."
+        
+    with open(log_path, "r", encoding="utf-8") as file:
+        return file.read()
 
 if __name__ == "__main__":
-    import os
-    # Read the dynamic port Render provides us on the Free plan, default to 10000 locally
-    port = int(os.getenv("PORT", 10000))
-    print(f"🌐 Spinning up Web Server on port {port}...")
-    uvicorn.run(web_app, host="0.0.0.0", port=port)
+    server_port = int(os.getenv("PORT", 10000))
+    logger.info(f"🌐 Commencing interface binding onto port: {server_port}")
+    uvicorn.run(app, host="0.0.0.0", port=server_port)
