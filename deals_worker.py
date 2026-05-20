@@ -15,12 +15,12 @@ def convert_to_earnkaro(target_url: str) -> str:
     encoded_target = urllib.parse.quote(base_url)
     return f"https://earnkaro.com/connect?url={encoded_target}"
 
-async def fetch_and_post_deals(bot_instance: Client, force: bool = False):
+async def fetch_and_post_deals(bot_instance: Client, force: bool = False, bypass_filters: bool = False):
     """
     Executes network pipeline parsing queries out to regional deal matrix streams.
-    If force=True, it will bypass the cache to guarantee a post for debugging tests.
+    bypass_filters=True allows ANY store to post immediately for testing purposes.
     """
-    logger.info(f"🔍 Querying feed networks (Force Post Mode: {force})...")
+    logger.info(f"🔍 Querying feed networks (Force: {force}, Bypass: {bypass_filters})...")
     feed_url = "https://www.desidime.com/feed/top-deals.atom"
     
     try:
@@ -29,30 +29,47 @@ async def fetch_and_post_deals(bot_instance: Client, force: bool = False):
             logger.warning("⚠️ Connected to aggregator node but found no raw elements present.")
             return False
 
-        for entry in feed.entries[:8]:  # Check up to 8 items to find a matching platform
+        allowed_platforms = ["amazon", "flipkart", "myntra", "ajio", "nykaa", "tatacliq", "croma", "boat"]
+        
+        for entry in feed.entries[:20]:  
             deal_id = entry.id
             
-            # If not forcing a test, check if it was already posted
             if not force and deal_id in POSTED_DEALS_CACHE:
                 continue
                 
             title = entry.title
             raw_url = entry.link
+            summary_text = entry.summary.lower() if hasattr(entry, 'summary') else ""
             
-            # Enforce validation rules protecting your tracking conversion streams
-            if not any(p in raw_url.lower() for p in ["amazon", "flipkart", "myntra"]):
-                continue
+            matched_platform = "DEAL"
+            
+            if not bypass_filters:
+                # Normal mode: check strict platform rules
+                found = False
+                for platform in allowed_platforms:
+                    if platform in raw_url.lower() or platform in summary_text:
+                        matched_platform = platform.upper()
+                        found = True
+                        break
+                if not found:
+                    continue  # Skip if it doesn't match a main e-commerce platform
+            else:
+                # Test mode: try to guess platform name, default to general name if not found
+                for platform in allowed_platforms:
+                    if platform in raw_url.lower() or platform in summary_text:
+                        matched_platform = platform.upper()
+                        break
 
             affiliate_link = convert_to_earnkaro(raw_url)
 
             premium_caption = (
-                f"🔥 **🔥 TOP TRENDING DEAL ALERT 🔥**\n\n"
+                f"⚙️ **[SYSTEM TEST] LIVE DEAL CONFIRMATION**\n\n"
                 f"📦 **Product:** {title}\n\n"
-                f"⚡ *Price drop detected! Grab it at its lowest price before stock runs out.*"
+                f"⚡ *This is an instant system test to verify connection loops are completely active.*"
             )
 
             inline_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(text="🛒 Grab Deal Now", url=affiliate_link)]
+                [InlineKeyboardButton(text=f"🛒 Try Link via {matched_platform}", url=affiliate_link)]
             ])
 
             await bot_instance.send_message(
@@ -61,9 +78,11 @@ async def fetch_and_post_deals(bot_instance: Client, force: bool = False):
                 reply_markup=inline_keyboard
             )
             
-            POSTED_DEALS_CACHE.add(deal_id)
-            logger.info(f"✅ Deal successfully posted to target channel: {title[:25]}...")
-            return True  # Stop processing immediately after finding one successful deal
+            if not force:
+                POSTED_DEALS_CACHE.add(deal_id)
+                
+            logger.info(f"✅ Test deal successfully sent to channel.")
+            return True 
             
         return False
             
@@ -74,7 +93,7 @@ async def fetch_and_post_deals(bot_instance: Client, force: bool = False):
 async def automation_loop(bot_instance: Client):
     """The continuous loop that runs the fetch sequence automatically every 30 minutes."""
     while True:
-        await fetch_and_post_deals(bot_instance, force=False)
+        await fetch_and_post_deals(bot_instance, force=False, bypass_filters=False)
         logger.info("😴 Automation sync pass completed. Sleeping for 30 minutes...")
         await asyncio.sleep(1800)
 
@@ -85,23 +104,35 @@ def register_handlers(bot_instance: Client):
     async def start_command(client, message):
         await message.reply_text(
             "👋 **Welcome to the Automated Affiliate Deal Finder Engine!**\n\n"
-            "The system is currently running in background monitoring mode checking for active price drops."
+            "Bot status: Online 🟢\n"
+            "Send `/check` to test normal matching rules.\n"
+            "Send `/testdeal` to force-post the newest item instantly regardless of platform."
         )
 
-    # SECURE ADMIN INSTANT CHECK TRIGGER ROUTINE
+    # 1. STANDARDIZED SEARCH (Stricter store checks)
     @bot_instance.on_message(filters.command("check") & filters.private)
     async def check_command(client, message):
-        # Security Barrier Verification: Stop if user is not the specified administrator
         if message.from_user.id != Config.ADMIN_ID:
-            logger.warning(f"🛡️ Unauthorized access blocked for User ID: {message.from_user.id}")
             return
+        status_msg = await message.reply_text("⚡ Scanning top 20 trending matching platform deals...")
+        did_post = await fetch_and_post_deals(client, force=True, bypass_filters=False)
+        if did_post:
+            await status_msg.edit_text("✅ Success! Matching deal posted.")
+        else:
+            await status_msg.edit_text("❌ Halt: No active deals matched main platform profiles right now.")
 
-        status_msg = await message.reply_text("⚡ **Admin Request Authenticated.** Connecting to aggregator nodes and looking for fresh live deals...")
+    # 2. INSTANT TEST EXPRESS (Bypasses all rules to force a live channel upload)
+    @bot_instance.on_message(filters.command("testdeal") & filters.private)
+    async def test_deal_command(client, message):
+        if message.from_user.id != Config.ADMIN_ID:
+            return
         
-        # Call function directly with force tracking set to True
-        did_post = await fetch_and_post_deals(client, force=True)
+        status_msg = await message.reply_text("🛠️ **Bypassing store filtering systems...** Fetching the absolute freshest item from the grid immediately...")
+        
+        # force=True and bypass_filters=True guarantees the newest deal pushes immediately
+        did_post = await fetch_and_post_deals(client, force=True, bypass_filters=True)
         
         if did_post:
-            await status_msg.edit_text("✅ **Success!** A top trending deal from Amazon/Flipkart/Myntra has been successfully generated, converted to EarnKaro, and pushed to your Telegram channel!")
+            await status_msg.edit_text("🚀 **Instant Test Completed!** Check your channel right now. A live formatted test post with an active EarnKaro link has been created.")
         else:
-            await status_msg.edit_text("❌ **Execution Halt:** Connected to feed streams successfully, but no major price drops matching Amazon, Flipkart, or Myntra are active at this millisecond. Try again in a few minutes.")
+            await status_msg.edit_text("❌ System error reading feed data array. Check web logs.")
