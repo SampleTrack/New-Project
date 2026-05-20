@@ -1,112 +1,97 @@
 import asyncio
+import re
 import sys
 import urllib.parse
 from hydrogram import Client, filters
-from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
 
-# Create placeholders for variables that will be assigned inside our async wrapper function
+# The public channel username you want to source deals from (Example: "dealshub")
+# Do not include the '@' symbol in this variable string
+SOURCE_CHANNEL = "ubuydeals" 
+
 app = None
 
 def convert_to_earnkaro(target_url: str) -> str:
+    """Extracts raw link parameters and nests them safely inside your EarnKaro redirect profile."""
     base_url = target_url.split("?")[0]
     encoded_target = urllib.parse.quote(base_url)
     return f"https://earnkaro.com/connect?url={encoded_target}"
 
-def clean_and_parse_input(text: str):
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
-    if len(lines) < 6:
-        return None
-    return lines
+def extract_urls(text: str) -> list:
+    """Finds all standard HTTP/HTTPS links hidden inside a raw message string."""
+    return re.findall(r'(https?://[^\s]+)', text)
 
 async def main():
     global app
-    print("🚀 Initializing Hydrogram Engine inside an explicit async loop context...")
+    print("🚀 Booting Autonomous Deal Scraper Loop Engine...")
     
-    # Instantiating the Client INSIDE the running loop eliminates the Python 3.14 event loop error entirely
     app = Client(
-        "earnkaro_bot",
+        "automated_deal_bot",
         api_id=Config.API_ID,
         api_hash=Config.API_HASH,
         bot_token=Config.BOT_TOKEN
     )
 
-    # Re-register your event handlers explicitly inside our wrapper scope context
-    @app.on_message(filters.command("start") & filters.private)
-    async def start_command(client, message):
-        await message.reply_text(
-            "👋 **Welcome to the Affiliate Deal Posting Engine!**\n\n"
-            "Send your raw deals inside this private admin panel using the template layout structure."
-        )
-
-    @app.on_message(filters.private & ~filters.command(["start"]))
-    async def process_deal_post(client, message):
-        parsed_lines = clean_and_parse_input(message.text)
-        
-        if not parsed_lines:
-            error_template = (
-                "⚠️ **Parsing Aborted: Incorrect Template Structure!**\n\n"
-                "Please send the data line-by-line exactly matching this blueprint:\n"
-                "```\n"
-                "Amazon\n"
-                "Noise Pulse 2 Max Smartwatch\n"
-                "1199\n"
-                "5999\n"
-                "80\n"
-                "[https://www.amazon.in/dp/B0B6BLG283](https://www.amazon.in/dp/B0B6BLG283)\n"
-                "[https://m.media-amazon.com/images/I/61S9aVn9bRL._SL1500_.jpg](https://m.media-amazon.com/images/I/61S9aVn9bRL._SL1500_.jpg)\n")
-            await message.reply_text(error_template)
+    # Listen specifically for incoming posts from your target source channel
+    @app.on_message(filters.chat(SOURCE_CHANNEL))
+    async def auto_scraper_handler(client, message):
+        # We need text data to process a clean post. If it's a raw image without a caption, skip.
+        raw_text = message.text or message.caption
+        if not raw_text:
             return
 
+        print(f"📥 New raw candidate deal captured from source channel: {message.id}")
+
+        # Step 1: Link Extraction & Verification
+        found_links = extract_urls(raw_text)
+        if not found_links:
+            return # No destination link means nothing to monetize
+            
+        source_link = found_links[0]
+        
+        # Step 2: Convert the external affiliate link to your EarnKaro account link
+        my_affiliate_link = convert_to_earnkaro(source_link)
+
+        # Step 3: Strip out the competitor's channel names or custom links
+        # This regex cleans up common promotional lines or signature tags
+        cleaned_text = re.sub(r'(@\w+|t\.me/\w+)', '', raw_text)
+        
+        # Step 4: Build your clean presentation layout structure
+        final_caption = (
+            f"🔥 **AUTOMATED HOT DEAL** 🔥\n\n"
+            f"{cleaned_text}\n\n"
+            f"👇 **Grab the deal here before it expires:**\n"
+            f"🔗 {my_affiliate_link}"
+        )
+
         try:
-            platform = parsed_lines[0].upper()
-            title = parsed_lines[1]
-            deal_price = parsed_lines[2]
-            mrp = parsed_lines[3]
-            discount = parsed_lines[4]
-            product_url = parsed_lines[5]
-            image_url = parsed_lines[6]
+            # Step 5: Mirror deployment logic. If the source post had an image, forward it with your new caption
+            if message.photo:
+                await client.send_photo(
+                    chat_id=Config.CHANNEL_ID,
+                    photo=message.photo.file_id, # Reuses Telegram's file ID for instant caching
+                    caption=final_caption
+                )
+            else:
+                await client.send_message(
+                    chat_id=Config.CHANNEL_ID,
+                    text=final_caption,
+                    disable_web_page_preview=False
+                )
+            print(f"✅ Deal {message.id} successfully auto-converted and broadcasted.")
 
-            affiliate_link = convert_to_earnkaro(product_url)
+        except Exception as dispatch_error:
+            print(f"⚠️ Non-fatal sync skip: {str(dispatch_error)}", file=sys.stderr)
 
-            premium_caption = (
-                f"🛍️ **{title}**\n\n"
-                f"⚡ **Deal Price:** ₹{deal_price}\n"
-                f"❌ **MRP:** ~~₹{mrp}~~\n"
-                f"📉 **Discount:** {discount}% Instant Save!\n\n"
-                f"🔥 *Grab it before the price spikes up again!*"
-            )
-
-            inline_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(text=f"🛒 Buy via {platform}", url=affiliate_link)]
-            ])
-
-            await client.send_photo(
-                chat_id=Config.CHANNEL_ID,
-                photo=image_url,
-                caption=premium_caption,
-                reply_markup=inline_keyboard
-            )
-
-            await message.reply_text("✅ **Success:** Post distributed safely to channel feeds!")
-
-        except Exception as e:
-            await message.reply_text(f"❌ **Execution Blocked:** System crash: `{str(e)}`")
-
-    # Start the engine asynchronously
     await app.start()
-    print("🤖 Bot is completely online and listening for events on Python 3.14!")
+    print("🤖 Automation Engine is online. Monitoring target streams 24/7...")
     
-    # Keep the task loop alive indefinitely 
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     try:
-        # Use native modern asyncio to handle boot sequencing
         asyncio.run(main())
-    except KeyboardInterrupt:
-        print("🛑 System shut down by manual kill instruction signal.")
     except Exception as boot_error:
-        print(f"❌ CRITICAL BOOT FAILURE: {str(boot_error)}", file=sys.stderr)
+        print(f"❌ CRITICAL WORKER FAULT: {str(boot_error)}", file=sys.stderr)
         sys.exit(1)
