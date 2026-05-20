@@ -1,29 +1,83 @@
 import asyncio
-import re
 import sys
 import urllib.parse
-from hydrogram import Client, filters
+import feedparser
+from hydrogram import Client
+from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
-
-# The public channel username you want to source deals from (Example: "dealshub")
-# Do not include the '@' symbol in this variable string
-SOURCE_CHANNEL = "ubuydeals" 
 
 app = None
 
+# A secure tracker to make sure the bot never posts the same deal twice
+POSTED_DEALS_CACHE = set()
+
 def convert_to_earnkaro(target_url: str) -> str:
-    """Extracts raw link parameters and nests them safely inside your EarnKaro redirect profile."""
+    """Wraps any raw product link directly into your EarnKaro monetization stream."""
     base_url = target_url.split("?")[0]
     encoded_target = urllib.parse.quote(base_url)
     return f"https://earnkaro.com/connect?url={encoded_target}"
 
-def extract_urls(text: str) -> list:
-    """Finds all standard HTTP/HTTPS links hidden inside a raw message string."""
-    return re.findall(r'(https?://[^\s]+)', text)
+async def fetch_and_post_deals():
+    """Connects to open deal streams, parses price drops, and pushes new deals."""
+    global app
+    print("🔍 Scanning live data feeds for top Amazon, Flipkart & Myntra deals...")
+    
+    # We use a curated Indian e-commerce deal aggregator feed tracking major price drops
+    # You can also substitute this with your custom EarnKaro RSS/Atom profile link if preferred
+    feed_url = "https://www.desidime.com/feed/top-deals.atom"
+    
+    try:
+        feed = feedparser.parse(feed_url)
+        
+        # Process the top 5 freshest deals found in the current scan loop
+        for entry in feed.entries[:5]:
+            deal_id = entry.id
+            
+            # Skip if we already published this specific deal in a previous cycle
+            if deal_id in POSTED_DEALS_CACHE:
+                continue
+                
+            title = entry.title
+            raw_url = entry.link
+            
+            # Simple keyword filtering to ensure we only pull from your preferred platforms
+            if not any(platform in raw_url.lower() for platform in ["amazon", "flipkart", "myntra"]):
+                continue
+
+            # Convert to your personal affiliate earning link
+            affiliate_link = convert_to_earnkaro(raw_url)
+
+            # Premium Channel Presentation Styling
+            premium_caption = (
+                f"🔥 **🔥 TOP TRENDING DEAL ALERT 🔥**\n\n"
+                f"📦 **Product:** {title}\n\n"
+                f"⚡ *Price drop detected! Grab it at its lowest price before stock runs out.*"
+            )
+
+            inline_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(text="🛒 Grab Deal Now", url=affiliate_link)]
+            ])
+
+            # Broadcast directly to your channel feed
+            await app.send_message(
+                chat_id=Config.CHANNEL_ID,
+                text=premium_caption,
+                reply_markup=inline_keyboard
+            )
+            
+            # Add to local memory cache to block future duplication loops
+            POSTED_DEALS_CACHE.add(deal_id)
+            print(f"✅ Auto-posted: {title[:30]}...")
+            
+            # Sleep brief seconds between consecutive channel posts to keep formatting clean
+            await asyncio.sleep(10)
+            
+    except Exception as e:
+        print(f"⚠️ Error while parsing deal feeds: {str(e)}", file=sys.stderr)
 
 async def main():
     global app
-    print("🚀 Booting Autonomous Deal Scraper Loop Engine...")
+    print("🚀 Initializing Autonomous Deal Finder Engine...")
     
     app = Client(
         "automated_deal_bot",
@@ -32,62 +86,14 @@ async def main():
         bot_token=Config.BOT_TOKEN
     )
 
-    # Listen specifically for incoming posts from your target source channel
-    @app.on_message(filters.chat(SOURCE_CHANNEL))
-    async def auto_scraper_handler(client, message):
-        # We need text data to process a clean post. If it's a raw image without a caption, skip.
-        raw_text = message.text or message.caption
-        if not raw_text:
-            return
-
-        print(f"📥 New raw candidate deal captured from source channel: {message.id}")
-
-        # Step 1: Link Extraction & Verification
-        found_links = extract_urls(raw_text)
-        if not found_links:
-            return # No destination link means nothing to monetize
-            
-        source_link = found_links[0]
-        
-        # Step 2: Convert the external affiliate link to your EarnKaro account link
-        my_affiliate_link = convert_to_earnkaro(source_link)
-
-        # Step 3: Strip out the competitor's channel names or custom links
-        # This regex cleans up common promotional lines or signature tags
-        cleaned_text = re.sub(r'(@\w+|t\.me/\w+)', '', raw_text)
-        
-        # Step 4: Build your clean presentation layout structure
-        final_caption = (
-            f"🔥 **AUTOMATED HOT DEAL** 🔥\n\n"
-            f"{cleaned_text}\n\n"
-            f"👇 **Grab the deal here before it expires:**\n"
-            f"🔗 {my_affiliate_link}"
-        )
-
-        try:
-            # Step 5: Mirror deployment logic. If the source post had an image, forward it with your new caption
-            if message.photo:
-                await client.send_photo(
-                    chat_id=Config.CHANNEL_ID,
-                    photo=message.photo.file_id, # Reuses Telegram's file ID for instant caching
-                    caption=final_caption
-                )
-            else:
-                await client.send_message(
-                    chat_id=Config.CHANNEL_ID,
-                    text=final_caption,
-                    disable_web_page_preview=False
-                )
-            print(f"✅ Deal {message.id} successfully auto-converted and broadcasted.")
-
-        except Exception as dispatch_error:
-            print(f"⚠️ Non-fatal sync skip: {str(dispatch_error)}", file=sys.stderr)
-
     await app.start()
-    print("🤖 Automation Engine is online. Monitoring target streams 24/7...")
-    
+    print("🤖 Bot is completely online and running on Render!")
+
+    # The continuous background automation routine loop
     while True:
-        await asyncio.sleep(3600)
+        await fetch_and_post_deals()
+        print("😴 Scan completed. Sleeping for 30 minutes before next auto-check...")
+        await asyncio.sleep(1800) # Checks for fresh price drops every 30 minutes
 
 if __name__ == "__main__":
     try:
