@@ -1,17 +1,18 @@
-import re
 import asyncio
-import urllib.parse
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import Config
+import sys
 
-# CRITICAL FIX FOR PYTHON 3.12+ / 3.14+
-# This forcefully creates and sets an active event loop before Pyrogram's core tries to grab it.
+# CRITICAL PYTHON 3.14 PATCH: Must be executed BEFORE pyrogram imports
 try:
     loop = asyncio.get_event_loop()
 except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+# Now it is safe to import pyrogram components
+import urllib.parse
+from hydrogram import Client, filters
+from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from config import Config
 
 app = Client(
     "earnkaro_bot",
@@ -35,7 +36,7 @@ def clean_and_parse_input(text: str):
 async def start_command(client, message):
     await message.reply_text(
         "👋 **Welcome to the Affiliate Deal Posting Engine!**\n\n"
-        "Send your raw deals inside this private admin panel using the exact template layout."
+        "Send your raw deals inside this private admin panel using the template layout structure."
     )
 
 @app.on_message(filters.private & ~filters.command(["start"]))
@@ -92,10 +93,12 @@ async def process_deal_post(client, message):
     except Exception as e:
         await message.reply_text(f"❌ **Execution Blocked:** Structural system crash: `{str(e)}`")
 
-# CRITICAL RUNTIME REWRITE FOR PYTHON 3.14+
-# Using app.run() triggers the broken native sync loop. Running via native asyncio fixes this.
 if __name__ == "__main__":
     print("🚀 Initializing Bot Engine via Native Asyncio Runner...")
-    loop.run_until_complete(app.start())
-    print("🤖 Bot is completely online and listening for events.")
-    loop.run_forever()
+    try:
+        loop.run_until_complete(app.start())
+        print("🤖 Bot is completely online and listening for events.")
+        loop.run_forever()
+    except Exception as boot_error:
+        print(f"❌ CRITICAL BOOT FAILURE: {str(boot_error)}", file=sys.stderr)
+        sys.exit(1)
