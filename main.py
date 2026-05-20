@@ -1,14 +1,3 @@
-import asyncio
-import sys
-
-# CRITICAL PYTHON 3.14 PATCH: Must be executed BEFORE pyrogram imports
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-# Now it is safe to import pyrogram components
 import urllib.parse
 from hydrogram import Client, filters
 from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -91,14 +80,10 @@ async def process_deal_post(client, message):
         await message.reply_text("✅ **Success:** Post distributed safely to channel feeds!")
 
     except Exception as e:
-        await message.reply_text(f"❌ **Execution Blocked:** Structural system crash: `{str(e)}`")
+        await message.reply_text(f"❌ **Execution Blocked:** System crash: `{str(e)}`")
 
+# Standard Hydrogram runner—fully compatible with Python 3.14!
 if __name__ == "__main__":
-    print("🚀 Initializing Bot Engine via Native Asyncio Runner...")
-    try:
-        loop.run_until_complete(app.start())
-        print("🤖 Bot is completely online and listening for events.")
-        loop.run_forever()
-    except Exception as boot_error:
-        print(f"❌ CRITICAL BOOT FAILURE: {str(boot_error)}", file=sys.stderr)
-        sys.exit(1)
+    print("🚀 Initializing Hydrogram Client Engine...")
+    app.run()
+
