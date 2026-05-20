@@ -2,52 +2,49 @@ import asyncio
 import sys
 import urllib.parse
 import feedparser
+import uvicorn
+from fastapi import FastAPI
 from hydrogram import Client
 from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
 
-app = None
-
-# A secure tracker to make sure the bot never posts the same deal twice
+# Initialize FastAPI Web Server to cheat Render's Free Port Check
+web_app = FastAPI()
+bot_app = None
 POSTED_DEALS_CACHE = set()
 
+@web_app.get("/")
+def read_root():
+    """Keeps Render happy by returning a 200 OK website status code."""
+    return {"status": "online", "message": "Affiliate Deal Bot Running Successfully"}
+
 def convert_to_earnkaro(target_url: str) -> str:
-    """Wraps any raw product link directly into your EarnKaro monetization stream."""
     base_url = target_url.split("?")[0]
     encoded_target = urllib.parse.quote(base_url)
     return f"https://earnkaro.com/connect?url={encoded_target}"
 
 async def fetch_and_post_deals():
-    """Connects to open deal streams, parses price drops, and pushes new deals."""
-    global app
+    """Scans aggregator streams for trending price drops and posts them."""
+    global bot_app
     print("🔍 Scanning live data feeds for top Amazon, Flipkart & Myntra deals...")
-    
-    # We use a curated Indian e-commerce deal aggregator feed tracking major price drops
-    # You can also substitute this with your custom EarnKaro RSS/Atom profile link if preferred
     feed_url = "https://www.desidime.com/feed/top-deals.atom"
     
     try:
         feed = feedparser.parse(feed_url)
-        
-        # Process the top 5 freshest deals found in the current scan loop
         for entry in feed.entries[:5]:
             deal_id = entry.id
-            
-            # Skip if we already published this specific deal in a previous cycle
             if deal_id in POSTED_DEALS_CACHE:
                 continue
                 
             title = entry.title
             raw_url = entry.link
             
-            # Simple keyword filtering to ensure we only pull from your preferred platforms
-            if not any(platform in raw_url.lower() for platform in ["amazon", "flipkart", "myntra"]):
+            # Filter specifically for your chosen e-commerce platforms
+            if not any(p in raw_url.lower() for p in ["amazon", "flipkart", "myntra"]):
                 continue
 
-            # Convert to your personal affiliate earning link
             affiliate_link = convert_to_earnkaro(raw_url)
 
-            # Premium Channel Presentation Styling
             premium_caption = (
                 f"🔥 **🔥 TOP TRENDING DEAL ALERT 🔥**\n\n"
                 f"📦 **Product:** {title}\n\n"
@@ -58,46 +55,46 @@ async def fetch_and_post_deals():
                 [InlineKeyboardButton(text="🛒 Grab Deal Now", url=affiliate_link)]
             ])
 
-            # Broadcast directly to your channel feed
-            await app.send_message(
+            await bot_app.send_message(
                 chat_id=Config.CHANNEL_ID,
                 text=premium_caption,
                 reply_markup=inline_keyboard
             )
             
-            # Add to local memory cache to block future duplication loops
             POSTED_DEALS_CACHE.add(deal_id)
             print(f"✅ Auto-posted: {title[:30]}...")
-            
-            # Sleep brief seconds between consecutive channel posts to keep formatting clean
             await asyncio.sleep(10)
             
     except Exception as e:
         print(f"⚠️ Error while parsing deal feeds: {str(e)}", file=sys.stderr)
 
-async def main():
-    global app
-    print("🚀 Initializing Autonomous Deal Finder Engine...")
-    
-    app = Client(
+async def automation_loop():
+    """Continuous loop running in the background every 30 minutes."""
+    while True:
+        await fetch_and_post_deals()
+        print("😴 Scan completed. Sleeping for 30 minutes...")
+        await asyncio.sleep(1800)
+
+@web_app.on_event("startup")
+async def start_bot():
+    """Triggers instantly when the FastAPI web server starts up."""
+    global bot_app
+    print("🚀 Initializing Hydrogram Bot Client Engine...")
+    bot_app = Client(
         "automated_deal_bot",
         api_id=Config.API_ID,
         api_hash=Config.API_HASH,
         bot_token=Config.BOT_TOKEN
     )
-
-    await app.start()
-    print("🤖 Bot is completely online and running on Render!")
-
-    # The continuous background automation routine loop
-    while True:
-        await fetch_and_post_deals()
-        print("😴 Scan completed. Sleeping for 30 minutes before next auto-check...")
-        await asyncio.sleep(1800) # Checks for fresh price drops every 30 minutes
+    await bot_app.start()
+    print("🤖 Bot is connected! Starting background auto-finder task...")
+    
+    # Run the deal finder loop as an independent background task inside the server
+    asyncio.create_task(automation_loop())
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception as boot_error:
-        print(f"❌ CRITICAL WORKER FAULT: {str(boot_error)}", file=sys.stderr)
-        sys.exit(1)
+    import os
+    # Read the dynamic port Render provides us on the Free plan, default to 10000 locally
+    port = int(os.getenv("PORT", 10000))
+    print(f"🌐 Spinning up Web Server on port {port}...")
+    uvicorn.run(web_app, host="0.0.0.0", port=port)
