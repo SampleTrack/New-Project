@@ -1,8 +1,17 @@
 import re
+import asyncio
 import urllib.parse
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
+
+# CRITICAL FIX FOR PYTHON 3.12+ / 3.14+
+# This forcefully creates and sets an active event loop before Pyrogram's core tries to grab it.
+try:
+    loop = asyncio.get_event_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
 app = Client(
     "earnkaro_bot",
@@ -12,21 +21,11 @@ app = Client(
 )
 
 def convert_to_earnkaro(target_url: str) -> str:
-    """
-    Encodes the target e-commerce asset link directly into the structural 
-    EarnKaro network referral stream parameters.
-    """
-    # Clean up standard redirect patterns if present
     base_url = target_url.split("?")[0]
     encoded_target = urllib.parse.quote(base_url)
-    
-    # Reconstruct the direct routing endpoint wrapper
-    # Replace 'yourusername' with your actual EarnKaro tracking name parameters if needed manually
-    earnkaro_affiliate_link = f"https://earnkaro.com/connect?url={encoded_target}"
-    return earnkaro_affiliate_link
+    return f"https://earnkaro.com/connect?url={encoded_target}"
 
 def clean_and_parse_input(text: str):
-    """Parses input strings smoothly safely ignoring extra whitespace patterns."""
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     if len(lines) < 6:
         return None
@@ -36,8 +35,7 @@ def clean_and_parse_input(text: str):
 async def start_command(client, message):
     await message.reply_text(
         "👋 **Welcome to the Affiliate Deal Posting Engine!**\n\n"
-        "Send your raw deals inside this private admin panel using the exact layout "
-        "format rules below to execute auto-posts instantly to your channel."
+        "Send your raw deals inside this private admin panel using the exact template layout."
     )
 
 @app.on_message(filters.private & ~filters.command(["start"]))
@@ -55,12 +53,14 @@ async def process_deal_post(client, message):
             "5999\n"
             "80\n"
             "[https://www.amazon.in/dp/B0B6BLG283](https://www.amazon.in/dp/B0B6BLG283)\n"
-            "[https://m.media-amazon.com/images/I/61S9aVn9bRL._SL1500_.jpg](https://m.media-amazon.com/images/I/61S9aVn9bRL._SL1500_.jpg)\n")
+            "[https://m.media-amazon.com/images/I/61S9aVn9bRL._SL1500_.jpg](https://m.media-amazon.com/images/I/61S9aVn9bRL._SL1500_.jpg)\n"
+            "
+```"
+        )
         await message.reply_text(error_template)
         return
 
     try:
-        # Extract individual clean segments from raw text matrix arrays
         platform = parsed_lines[0].upper()
         title = parsed_lines[1]
         deal_price = parsed_lines[2]
@@ -69,10 +69,8 @@ async def process_deal_post(client, message):
         product_url = parsed_lines[5]
         image_url = parsed_lines[6]
 
-        # Generate monetization link sequence 
         affiliate_link = convert_to_earnkaro(product_url)
 
-        # High-Conversion Channel UX Architecture layout
         premium_caption = (
             f"🛍️ **{title}**\n\n"
             f"⚡ **Deal Price:** ₹{deal_price}\n"
@@ -85,7 +83,6 @@ async def process_deal_post(client, message):
             [InlineKeyboardButton(text=f"🛒 Buy via {platform}", url=affiliate_link)]
         ])
 
-        # Push to the structural target distribution channel destination
         await client.send_photo(
             chat_id=Config.CHANNEL_ID,
             photo=image_url,
@@ -98,7 +95,10 @@ async def process_deal_post(client, message):
     except Exception as e:
         await message.reply_text(f"❌ **Execution Blocked:** Structural system crash: `{str(e)}`")
 
+# CRITICAL RUNTIME REWRITE FOR PYTHON 3.14+
+# Using app.run() triggers the broken native sync loop. Running via native asyncio fixes this.
 if __name__ == "__main__":
-    print("🚀 Bot Client initialization successful. Loop started.")
-    app.run()
-
+    print("🚀 Initializing Bot Engine via Native Asyncio Runner...")
+    loop.run_until_complete(app.start())
+    print("🤖 Bot is completely online and listening for events.")
+    loop.run_forever()
